@@ -1,0 +1,91 @@
+name: ВАРТА — Парсер загроз
+
+on:
+  # Запуск кожні 10 хвилин (GitHub Actions cron — UTC)
+  schedule:
+    - cron: '*/10 * * * *'
+
+  # Ручний запуск через Actions UI
+  workflow_dispatch:
+    inputs:
+      hours_lookback:
+        description: 'Скільки годин назад брати (перший запуск)'
+        required: false
+        default: '24'
+        type: string
+
+permissions:
+  contents: write   # потрібно для git push
+
+jobs:
+  parse:
+    name: Збір та геокодування подій
+    runs-on: ubuntu-latest
+    timeout-minutes: 8   # жорсткий ліміт, щоб не тримати runner
+
+    steps:
+      # ── 1. Клонуємо репо ─────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          # Токен зі скоупом write для push
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 2. Python ─────────────────────────────────────────────────────────
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install telethon
+
+      # ── 3. Відновлюємо Telegram-сесію з секрету ───────────────────────────
+      #    Перед першим запуском потрібно:
+      #    1. Локально запустити setup_session.py
+      #    2. Виконати: base64 -w0 varta_session.session > session.b64
+      #    3. Вміст session.b64 додати як секрет TG_SESSION_B64
+      - name: Restore Telegram session
+        run: |
+          echo "${{ secrets.TG_SESSION_B64 }}" | base64 -d > varta_session.session
+          ls -lh varta_session.session
+
+      # ── 4. Запускаємо парсер ──────────────────────────────────────────────
+      - name: Run parser
+        env:
+          TG_API_ID:      ${{ secrets.TG_API_ID }}
+          TG_API_HASH:    ${{ secrets.TG_API_HASH }}
+          DATA_FILE:      data.json
+          STATE_FILE:     state.json
+          GEOCACHE:       geocache.json
+          MAX_EVENTS:     "500"
+          MSG_LIMIT:      "100"
+          HOURS_LOOKBACK: ${{ github.event.inputs.hours_lookback || '12' }}
+        run: python parser.py
+
+      # ── 5. Зберігаємо зміни в репо ────────────────────────────────────────
+      - name: Commit updated data
+        run: |
+          git config user.name  "ВАРТА Bot"
+          git config user.email "varta-bot@users.noreply.github.com"
+
+          # Додаємо тільки файли даних, не parser.py
+          git add data.json state.json geocache.json
+
+          # Якщо нічого не змінилося — не робимо порожній коміт
+          if git diff --cached --quiet; then
+            echo "✅ Даних не змінилось, пропускаємо commit"
+          else
+            TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
+            EVENT_COUNT=$(python -c "import json; d=json.load(open('data.json')); print(len(d))" 2>/dev/null || echo "?")
+            git commit -m "data: ${EVENT_COUNT} подій [${TIMESTAMP}]"
+            git push
+            echo "✅ Запушено"
+          fi
+
+      # ── 6. Видаляємо session-файл (безпека) ───────────────────────────────
+      - name: Cleanup session
+        if: always()
+        run: rm -f varta_session.session
