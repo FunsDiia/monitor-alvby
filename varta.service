@@ -1,0 +1,34 @@
+[Unit]
+Description=ВАРТА — Telegram парсер загроз
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=varta
+WorkingDirectory=/opt/varta
+
+# Змінні середовища — або заповніть тут, або в /opt/varta/.env
+EnvironmentFile=-/opt/varta/.env
+Environment=TG_API_ID=ВАШ_API_ID
+Environment=TG_API_HASH=ВАШ_API_HASH
+Environment=TG_SESSION=/opt/varta/varta_session
+Environment=DATA_FILE=/var/www/varta/data.json
+Environment=MAX_EVENTS=200
+Environment=LOG_LEVEL=INFO
+
+ExecStart=/opt/varta/venv/bin/python /opt/varta/parser.py
+
+# Перезапуск при збої
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Логи
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=varta-parser
+
+[Install]
+WantedBy=multi-user.target
